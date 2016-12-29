@@ -225,7 +225,7 @@ def find_hierarchy_with_rtti(vtable):
         hierarchy = {}
 
         for parent in typeinfo.parents:
-            hierarchy[parent.name] = find_hierarchy_from_rtti(parent)
+            hierarchy[parent.name] = find_hierarchy_with_typeinfo(parent)
         return hierarchy
     return find_hierarchy_with_typeinfo(vtable.typeinfo)
 
