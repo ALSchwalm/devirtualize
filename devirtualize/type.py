@@ -2,46 +2,16 @@ import idaapi
 import idautils
 import idc
 
-info = idaapi.get_inf_structure()
-if info.is_64bit():
-    TARGET_ADDRESS_SIZE = 8
-elif info.is_32bit():
-    TARGET_ADDRESS_SIZE = 4
+from .utils import *
+
+if VTABLE_ABI == "ITANIUM":
+    from .itanium import ItaniumTypeInfo as TypeInfo
+    from .itanium import ItaniumVTable as VTable
 else:
-    raise RuntimeError("Platform is not 64 or 32 bit")
+    raise RuntimeError("Unsupported vtable ABI")
+    # from .msvc import MSVCTypeInfo as TypeInfo
+    # from .msvc import MSVCVtable as VTable
 
-def get_address(ea):
-    if TARGET_ADDRESS_SIZE == 8:
-        res = idaapi.get_64bit(ea)
-    elif TARGET_ADDRESS_SIZE == 4:
-        res = idaapi.get_32bit(ea)
-    else:
-        raise RuntimeError("Platform is not 64 or 32 bit")
-    return (ea + TARGET_ADDRESS_SIZE, res)
-
-
-def is_in_executable_segment(ea):
-    if idaapi.getseg(ea) is None:
-        return False
-    return idaapi.getseg(ea).perm & idaapi.SEGPERM_EXEC
-
-def is_vtable_name(name):
-    demangled = idc.Demangle(name, idc.GetLongPrm(idc.INF_LONG_DN))
-    if demangled is not None and demangled.startswith("`vtable for"):
-        return True
-    return False
-
-def in_same_segment(addr1, addr2):
-    return (idaapi.getseg(addr1) is not None and
-            idaapi.getseg(addr2) is not None and
-            idaapi.getseg(addr1).startEA ==
-            idaapi.getseg(addr2).startEA)
-
-def as_signed(value, size):
-    if value > 1 << (size*8 - 1):
-        return value - (1 << (size*8))
-    else:
-        return value
 
 def tables_from_names():
     for n in idautils.Names():
@@ -63,7 +33,7 @@ def tables_from_heuristics(require_rtti=False):
         ea = seg.startEA
         while ea < seg.endEA:
             try:
-                table = ItaniumVTable(ea)
+                table = VTable(ea)
                 if require_rtti is True and ea.typeinfo is not None:
                     yield ea
                 elif require_rtti is False:
@@ -74,7 +44,7 @@ def tables_from_heuristics(require_rtti=False):
 
 def Vtables(regenerate=False):
     if regenerate is True or Vtables.cache is None:
-        Vtables.cache = list([ItaniumVTable(t) for t in tables_from_heuristics()])
+        Vtables.cache = list([VTable(t) for t in tables_from_heuristics()])
     return Vtables.cache
 Vtables.cache = None
 
@@ -85,10 +55,6 @@ def type_matching_typeinfo(types, typeinfo):
         if type.typeinfo.ea == typeinfo.ea:
             return type
     return None
-
-def type_parents(type):
-    if type.typeinfo is not None:
-        return
 
 def Types(regenerate=False):
     def add_parents(types, typeinfo):
@@ -116,7 +82,7 @@ def Types(regenerate=False):
     if regenerate is True or Types.cache is None:
         Types.cache = []
         for table in tables_from_heuristics():
-            vtable = ItaniumVTable(table)
+            vtable = VTable(table)
 
             existing_type = type_matching_typeinfo(Types.cache, vtable.typeinfo)
             if existing_type:
@@ -207,139 +173,6 @@ def parents_from_destructors(vtable):
     iff.apply_to(cfunc.body, None)
     return parents
 
-
-class ItaniumTypeInfo(object):
-    def __init__(self, ea):
-        self.ea = ea
-        self.parents = []
-
-        # first entry is the vptr for the typeinfo
-        ea, _ = get_address(ea)
-        ea, self.nameptr = get_address(ea)
-        self.name = idc.GetString(self.nameptr)
-
-        # After the name is either the base class typeinfo pointer
-        # (in the case of single inheritance), or an array of
-        # typeinfos for each base (in multiple inheritance)
-        _, baseaddr = get_address(ea)
-
-        # Crude test for whether the address seems like a
-        # plausible location for the baseclass typeinfo
-        if in_same_segment(baseaddr, ea):
-            self.parents = [ItaniumTypeInfo(baseaddr)]
-            return
-
-        # Either this is multiple inheritance or no inheritance
-        flags = idaapi.get_32bit(ea)
-        count = idaapi.get_32bit(ea + 4)
-        ea += 8
-
-        # Only valid '__flags' are 0, 1, and 2
-        if flags not in [0, 1, 2]:
-            return
-
-        self.flags = flags
-        for i in range(count):
-            ea, baseaddr = get_address(ea)
-            self.parents.append(ItaniumTypeInfo(baseaddr))
-
-            # For now ignore the '__offset_flags'
-            ea += 8
-
-class ItaniumSubVtable(object):
-    def __init__(self, ea):
-        self.ea = ea
-
-        ea, baseoffset = get_address(ea)
-        self.baseoffset = as_signed(baseoffset, TARGET_ADDRESS_SIZE)
-
-        # Arbitrary bounds for offset size
-        if self.baseoffset < -0xFFFFFF or self.baseoffset > 0xFFFFFF:
-            raise ValueError("Invalid subtable address `0x{:02x}`".format(self.ea))
-
-        ea, typeinfo = get_address(ea)
-        self.typeinfo = None
-
-        if typeinfo != 0:
-            if not in_same_segment(typeinfo, self.ea):
-                raise ValueError("Invalid subtable address `0x{:02x}`".format(self.ea))
-            else:
-                self.typeinfo = ItaniumTypeInfo(typeinfo)
-
-        self.functions = []
-
-        # The start of the function array
-        self.functions_ea = ea
-
-        while True:
-            ea, func = get_address(ea)
-
-            # The first two functions can be 0
-            if not is_in_executable_segment(func):
-                if func == 0 and all([f == 0 for f in self.functions]):
-                    pass
-                else:
-                    break
-
-            self.functions.append(func)
-
-        # Because the first two functions can be zero, and the RTTI
-        # pointer and base offset can also be zero, require at least
-        # one function to not be zero (so blocks of zero don't match).
-        if all([f == 0 for f in self.functions]):
-            raise ValueError("Invalid subtable address `0x{:02x}`".format(self.ea))
-
-        self.size = TARGET_ADDRESS_SIZE*(len(self.functions) + 2)
-
-    @property
-    def name(self):
-        if self.typeinfo is None:
-            return None
-        return self.typeinfo.name
-
-class ItaniumVTable(object):
-    def __init__(self, ea):
-        self.ea = ea
-        self.subtables = []
-
-        prev_offset = None
-        while True:
-            try:
-                subtable = ItaniumSubVtable(ea)
-            except:
-                break
-
-            # Sanity check the offset
-            if prev_offset is None and subtable.baseoffset != 0:
-                break
-            elif prev_offset is not None and subtable.baseoffset >= prev_offset:
-                break
-
-            prev_offset = subtable.baseoffset
-            self.subtables.append(subtable)
-            ea += subtable.size
-
-        if not self.subtables:
-            raise ValueError("Invalid vtable address `0x{:02x}`".format(self.ea))
-
-    def _primary_table(self):
-        return self.subtables[0]
-
-    @property
-    def typeinfo(self):
-        return self._primary_table().typeinfo
-
-    @property
-    def size(self):
-        return sum([s.size for s in self.subtables])
-
-    @property
-    def name(self):
-        prim = self._primary_table()
-        if prim.typeinfo is not None:
-            return prim.name
-        return None
-
 class Type(object):
     def __init__(self, vtable=None, typeinfo=None):
         if vtable is None and typeinfo is None:
@@ -350,6 +183,14 @@ class Type(object):
 
         self.parents = []
         self.children = []
+
+        if self.typeinfo is None:
+            if self.vtable is not None:
+                self._name = "type_{:02x}".format(self.vtable.ea)
+            else:
+                self._name = "type_{:02x}".format(id(self))
+        else:
+            self._name = self.typeinfo.name
 
     def __eq__(self, other):
         if self.vtable is not None:
@@ -377,20 +218,18 @@ class Type(object):
 
     @property
     def name(self):
-        if self.typeinfo is None:
-            if self.vtable is not None:
-                return "type_{:02x}".format(self.vtable.ea)
-            else:
-                return "type_{:02x}".format(id(self))
-        else:
-            return self.typeinfo.name
+        return self._name
+
+    @name.setter
+    def name(self, newname):
+        #TODO: rename struct
+        self._name = newname
 
     def __str__(self):
         return self.name
 
     def __repr__(self):
         return str(self)
-
 
 def func_type_ptr(cfunc):
     tinfo = idaapi.tinfo_t()

@@ -24,7 +24,7 @@ class devirtualize_plugin_t(idaapi.plugin_t):
         node = devirtualize.netnode.Netnode("$ devirtualize")
 
         try:
-            idaapi.require('devirtualize.vtable')
+            idaapi.require('devirtualize.type')
         except:
             idaapi.msg(traceback.format_exc())
         idaapi.msg('devirtualize_plugin:run\n')
