@@ -78,6 +78,136 @@ def Vtables(regenerate=False):
     return Vtables.cache
 Vtables.cache = None
 
+def type_matching_typeinfo(types, typeinfo):
+    if typeinfo is None:
+        return None
+    for type in types:
+        if type.typeinfo.ea == typeinfo.ea:
+            return type
+    return None
+
+def type_parents(type):
+    if type.typeinfo is not None:
+        return
+
+def Types(regenerate=False):
+    def add_parents(types, typeinfo):
+        for parent in typeinfo.parents:
+            existing_type = type_matching_typeinfo(types, parent)
+            if existing_type:
+                continue
+            else:
+                types.append(Type(None, parent))
+                add_parents(types, parent)
+
+    def generate_type_relations(types):
+        # Generate the type relationships
+        for type in types:
+            if type.typeinfo is not None:
+                parents = [type_matching_typeinfo(types, p)
+                           for p in type.typeinfo.parents]
+            else:
+                parents = parents_from_destructors(type.vtable)
+
+            for p in parents:
+                p.children.append(type)
+                type.parents.append(p)
+
+    if regenerate is True or Types.cache is None:
+        Types.cache = []
+        for table in tables_from_heuristics():
+            vtable = ItaniumVTable(table)
+
+            existing_type = type_matching_typeinfo(Types.cache, vtable.typeinfo)
+            if existing_type:
+                existing_type.vtable = vtable
+            else:
+                Types.cache.append(Type(vtable, vtable.typeinfo))
+
+            if vtable.typeinfo:
+                add_parents(Types.cache, vtable.typeinfo)
+
+        generate_type_relations(Types.cache)
+
+    return Types.cache
+Types.cache = None
+
+def destructor_calls(vtable):
+    candidates = []
+
+    # For now just use the first subtable array
+    primary_table = vtable.subtables[0]
+
+    for ref in idautils.XrefsTo(primary_table.functions_ea):
+        start = as_signed(idc.GetFunctionAttr(ref.frm, idc.FUNCATTR_START),
+                          TARGET_ADDRESS_SIZE)
+        if start == -1:
+            continue
+        candidates.append(start)
+
+    #TODO: don't assume the destructor is virtual
+    candidates = [c for c in candidates if c in primary_table.functions]
+    return candidates
+
+def get_type_having_destructor(func_ea):
+    for type in Types():
+        if type.vtable is None:
+            continue
+        if func_ea in destructor_calls(type.vtable):
+            return type
+    return None
+
+
+def parents_from_destructors(vtable):
+    #TODO: consider other candidates
+    destructor = destructor_calls(vtable)[0]
+
+    parents = []
+    cfunc = idaapi.decompile(destructor);
+
+    class destructor_finder_t(idaapi.ctree_visitor_t):
+        def __init__(self, ea):
+            idaapi.ctree_visitor_t.__init__(self, idaapi.CV_FAST)
+            self.destructor_candidate = None
+
+        def visit_expr(self, e):
+            if e.op == idaapi.cot_call:
+                # Destructors only take 1 arg
+                if len(e.a) != 1:
+                    return 0
+
+                # Strange two-step to get the address of the
+                # function being called by this expression.
+                #
+                # If anyone has a better way to do this, please
+                # let me know.
+                func_name = idc.GetOpnd(e.ea, 0)
+                addr = idaapi.get_name_ea(idc.BADADDR, func_name)
+
+                type = get_type_having_destructor(addr)
+                if type is None:
+                    return 0
+
+                self.destructor_candidate = (e, type)
+                return 0
+            elif e.op == idaapi.cot_var:
+                if (self.destructor_candidate is None or
+                    not e.is_call_arg_of(self.destructor_candidate[0]) or
+                    e.v.idx != 0):
+                    return 0
+                parents.append(self.destructor_candidate[1])
+            return 0
+
+        def leave_expr(self, e):
+            if e.op == idaapi.cot_call:
+                self.destructor_candidate = None
+
+
+    iff = destructor_finder_t(destructor)
+    iff.apply_to(cfunc.body, None)
+    return parents
+
+
 class ItaniumTypeInfo(object):
     def __init__(self, ea):
         self.ea = ea
@@ -208,99 +338,59 @@ class ItaniumVTable(object):
         prim = self._primary_table()
         if prim.typeinfo is not None:
             return prim.name
-        return "type_{:02x}".format(self.ea)
+        return None
 
-def table_from_typeinfo(typeinfo, tables):
-    for candidate in tables:
-        if candidate.typeinfo is None:
-            continue
-        elif candidate.typeinfo.ea == typeinfo.ea:
-            return candidate
-    return None
+class Type(object):
+    def __init__(self, vtable=None, typeinfo=None):
+        if vtable is None and typeinfo is None:
+            raise ValueError("Either 'vtable' or 'typeinfo' must be non-None")
 
-def find_hierarchy_with_rtti(vtable):
-    def find_hierarchy_with_typeinfo(typeinfo):
-        if typeinfo is None:
-            return {}
-        hierarchy = {}
+        self.vtable = vtable
+        self.typeinfo = typeinfo
 
-        for parent in typeinfo.parents:
-            hierarchy[parent.name] = find_hierarchy_with_typeinfo(parent)
-        return hierarchy
-    return find_hierarchy_with_typeinfo(vtable.typeinfo)
+        self.parents = []
+        self.children = []
 
-def destructor_calls(vtable):
-    candidates = []
+    def __eq__(self, other):
+        if self.vtable is not None:
+            if other.vtable is None:
+                return False
+            return self.vtable.ea == other.vtable.ea
+        else:
+            if other.typeinfo is None:
+                return False
+            return self.typeinfo.ea == other.typeinfo.ea
 
-    # For now just use the first subtable array
-    primary_table = vtable.subtables[0]
+    @property
+    def ancestors(self):
+        ancestors = {}
+        for p in self.parents:
+            ancestors[p] = p.ancestors
+        return ancestors
 
-    for ref in idautils.XrefsTo(primary_table.functions_ea):
-        start = as_signed(idc.GetFunctionAttr(ref.frm, idc.FUNCATTR_START),
-                          TARGET_ADDRESS_SIZE)
-        if start == -1:
-            continue
-        candidates.append(start)
+    @property
+    def descendants(self):
+        descendants = {}
+        for c in self.children:
+            descendants[c] = c.descendants
+        return descendants
 
-    #TODO: don't assume the destructor is virtual
-    candidates = [c for c in candidates if c in primary_table.functions]
-    return candidates
+    @property
+    def name(self):
+        if self.typeinfo is None:
+            if self.vtable is not None:
+                return "type_{:02x}".format(self.vtable.ea)
+            else:
+                return "type_{:02x}".format(id(self))
+        else:
+            return self.typeinfo.name
 
-def get_table_having_destructor(func_ea):
-    for table in Vtables():
-        if func_ea in destructor_calls(table):
-            return table
-    return None
+    def __str__(self):
+        return self.name
 
+    def __repr__(self):
+        return str(self)
 
-def parents_from_destructors(vtable):
-    #TODO: consider other candidates
-    destructor = destructor_calls(vtable)[0]
-
-    parents = []
-    cfunc = idaapi.decompile(destructor);
-
-    class destructor_finder_t(idaapi.ctree_visitor_t):
-        def __init__(self, ea):
-            idaapi.ctree_visitor_t.__init__(self, idaapi.CV_FAST)
-            self.destructor_candidate = None
-
-        def visit_expr(self, e):
-            if e.op == idaapi.cot_call:
-                # Destructors only take 1 arg
-                if len(e.a) != 1:
-                    return 0
-
-                # Strange two-step to get the address of the
-                # function being called by this expression.
-                #
-                # If anyone has a better way to do this, please
-                # let me know.
-                func_name = idc.GetOpnd(e.ea, 0)
-                addr = idaapi.get_name_ea(idc.BADADDR, func_name)
-
-                table = get_table_having_destructor(addr)
-                if table is None:
-                    return 0
-
-                self.destructor_candidate = (e, table)
-                return 0
-            elif e.op == idaapi.cot_var:
-                if (self.destructor_candidate is None or
-                    not e.is_call_arg_of(self.destructor_candidate[0]) or
-                    e.v.idx != 0):
-                    return 0
-                parents.append(self.destructor_candidate[1])
-            return 0
-
-        def leave_expr(self, e):
-            if e.op == idaapi.cot_call:
-                self.destructor_candidate = None
-
-
-    iff = destructor_finder_t(destructor)
-    iff.apply_to(cfunc.body, None)
-    return parents
 
 def func_type_ptr(cfunc):
     tinfo = idaapi.tinfo_t()
@@ -364,18 +454,3 @@ def create_types():
 
             idc.SetType(idc.GetMemberId(struct_id, -subtable.baseoffset),
                         vtable_name + "*");
-
-def find_hierarchy_without_rtti(vtable):
-    hierarchy = {}
-
-    parents = parents_from_destructors(vtable)
-    for parent in parents:
-        hierarchy[parent.name] = find_hierarchy_without_rtti(parent)
-    return hierarchy
-
-create_types()
-
-# print(parents_from_destructors(Vtables()[0]))
-
-for table in Vtables():
-    print(table.name, find_hierarchy_without_rtti(table))
