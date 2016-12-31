@@ -27,6 +27,9 @@ class devirtualize_plugin_t(idaapi.plugin_t):
             idaapi.require('devirtualize.type')
         except:
             idaapi.msg(traceback.format_exc())
+
+        idaapi.require('devirtualize.view')
+        devirtualize.view.register_vptr_translator()
         idaapi.msg('devirtualize_plugin:run\n')
 
     def term(self):

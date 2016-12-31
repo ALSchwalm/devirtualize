@@ -40,6 +40,7 @@ def tables_from_heuristics(require_rtti=False):
                     yield ea
                 ea += table.size
             except:
+                # Assume vtables are aligned
                 ea += TARGET_ADDRESS_SIZE
 
 def Vtables(regenerate=False):
@@ -183,6 +184,7 @@ class Type(object):
 
         self.parents = []
         self.children = []
+        self.struct = None
 
         if self.typeinfo is None:
             if self.vtable is not None:
@@ -190,7 +192,14 @@ class Type(object):
             else:
                 self._name = "type_{:02x}".format(id(self))
         else:
-            self._name = self.typeinfo.name
+            # The names in RTTI are not mangled normally, so prepend
+            # the required '_Z'
+            demangled = idc.Demangle("_Z" + self.typeinfo.name,
+                                     idc.GetLongPrm(idc.INF_LONG_DN))
+            if demangled is None:
+                self._name = self.typeinfo.name
+            else:
+                self._name = demangled
 
     def __eq__(self, other):
         if self.vtable is not None:
@@ -217,6 +226,27 @@ class Type(object):
         return descendants
 
     @property
+    def family(self):
+        #TODO: memoize this
+
+        # There really shouldn't be loops in this topology,
+        # but the user could add one, so lets just assume
+        # they're allowed.
+        open_set = set([self])
+        closed_set = set([])
+
+        while len(open_set) > 0:
+            type = open_set.pop()
+            closed_set.add(type)
+            for c in type.children:
+                if c not in closed_set:
+                    open_set.add(c)
+            for p in type.parents:
+                if p not in closed_set:
+                    open_set.add(p)
+        return closed_set
+
+    @property
     def name(self):
         return self._name
 
@@ -224,6 +254,51 @@ class Type(object):
     def name(self, newname):
         #TODO: rename struct
         self._name = newname
+
+    def build_struct(self):
+        if self.struct is not None:
+            return
+
+        for p in self.parents:
+            p.build_struct()
+
+        self.struct = idc.AddStrucEx(-1, self.name, 0)
+
+        if as_signed(self.struct, TARGET_ADDRESS_SIZE) == -1:
+            raise RuntimeError("Unable to make struct `{}`".format(self.name))
+
+        if TARGET_ADDRESS_SIZE == 8:
+            mask = idc.FF_QWRD
+        else:
+            mask = idc.FF_DWRD
+
+        # Only bases get the magic _vptr member
+        if len(self.parents) == 0:
+            idc.AddStrucMember(self.struct,
+                               "_vptr",
+                               0,
+                               idc.FF_DATA|mask,
+                               -1,
+                               TARGET_ADDRESS_SIZE)
+            idc.SetType(idc.GetMemberId(self.struct, 0),
+                        "void**");
+
+        for i, parent in enumerate(self.parents):
+            try:
+                offset = self.vtable.subtables[i].baseoffset
+            except:
+                break
+
+            idc.AddStrucMember(self.struct,
+                               "parent_{}".format(i),
+                               -offset,
+                               idc.FF_DATA,
+                               -1,
+                               idc.GetStrucSize(parent.struct))
+
+            idc.SetType(idc.GetMemberId(self.struct, -offset),
+                        parent.name);
+
 
     def __str__(self):
         return self.name
@@ -252,44 +327,9 @@ def fixup_this_type(cfunc, func_addr, this_type):
     cfunc.get_func_type(tinfo)
     idaapi.set_tinfo2(func_addr, tinfo)
 
+def build_types():
+    for t in Types():
+        t.build_struct()
 
-def create_types():
-    for table in Vtables():
-        struct_name = table.name
-        struct_id = idc.AddStrucEx(-1, struct_name, 0)
-
-        if TARGET_ADDRESS_SIZE == 8:
-            mask = idc.FF_QWRD
-        else:
-            mask = idc.FF_DWRD
-
-        for i, subtable in enumerate(table.subtables):
-            if table.name is not None:
-                vtable_name = "subtable{}_{}".format(struct_name, i)
-            else:
-                vtable_name = "subtable_{:02x}_{}".format(table.ea, i)
-
-            subtable_id = idc.AddStrucEx(-1, vtable_name, 0)
-
-            for n, func in enumerate(subtable.functions):
-                idc.AddStrucMember(subtable_id,
-                                   idc.GetFunctionName(func),
-                                   -1,
-                                   idc.FF_DATA|mask,
-                                   -1,
-                                   TARGET_ADDRESS_SIZE)
-                cfunc = idaapi.decompile(func)
-                fixup_this_type(cfunc, func, struct_name)
-                ptr = func_type_ptr(cfunc)
-                idc.SetType(idc.GetMemberId(subtable_id, n*TARGET_ADDRESS_SIZE),
-                            ptr)
-
-            idc.AddStrucMember(struct_id,
-                               "_vptr_{}".format(i),
-                               -subtable.baseoffset,
-                               idc.FF_DATA|mask,
-                               -1,
-                               TARGET_ADDRESS_SIZE)
-
-            idc.SetType(idc.GetMemberId(struct_id, -subtable.baseoffset),
-                        vtable_name + "*");
+print([t.name for t in Types()])
+build_types()
