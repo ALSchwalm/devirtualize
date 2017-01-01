@@ -99,6 +99,12 @@ def Types(regenerate=False):
     return Types.cache
 Types.cache = None
 
+def get_type_by_name(name):
+    for t in Types():
+        if t.name == name:
+            return t
+    return None
+
 def destructor_calls(vtable):
     candidates = []
 
@@ -192,14 +198,7 @@ class Type(object):
             else:
                 self._name = "type_{:02x}".format(id(self))
         else:
-            # The names in RTTI are not mangled normally, so prepend
-            # the required '_Z'
-            demangled = idc.Demangle("_Z" + self.typeinfo.name,
-                                     idc.GetLongPrm(idc.INF_LONG_DN))
-            if demangled is None:
-                self._name = self.typeinfo.name
-            else:
-                self._name = demangled
+            self._name = demangle(self.typeinfo.name)
 
     def __eq__(self, other):
         if self.vtable is not None:
@@ -255,6 +254,33 @@ class Type(object):
         #TODO: rename struct
         self._name = newname
 
+    def subtable_for_cast(self, parent):
+        ''' Returns the subtable that would be used for virtual function
+        lookups if this type was cast to 'parent'.
+        '''
+        def traverse_heirarchy(tree, target):
+            if len(tree) == 0:
+                return (1, False)
+            total = 0
+            found = False
+            for type, parents in tree.iteritems():
+                if type == target:
+                    return (total, True)
+                count, found = traverse_heirarchy(parents, target)
+                total += count
+                if found is True:
+                    break
+            return (total, found)
+        if self.vtable is None:
+            return None
+
+        total, found = traverse_heirarchy(self.ancestors, parent)
+        if found is False:
+            return None
+
+        return self.vtable.subtables[total-1]
+
+
     def build_struct(self):
         if self.struct is not None:
             return
@@ -281,7 +307,7 @@ class Type(object):
                                -1,
                                TARGET_ADDRESS_SIZE)
             idc.SetType(idc.GetMemberId(self.struct, 0),
-                        "void**");
+                        "_vfunc**");
 
         for i, parent in enumerate(self.parents):
             try:
@@ -328,6 +354,7 @@ def fixup_this_type(cfunc, func_addr, this_type):
     idaapi.set_tinfo2(func_addr, tinfo)
 
 def build_types():
+    idc.AddStrucEx(-1, "_vfunc", 0)
     for t in Types():
         t.build_struct()
 

@@ -54,3 +54,22 @@ def as_signed(value, size):
         return value - (1 << (size*8))
     else:
         return value
+
+def demangle(name, strip_arg_types=False):
+    def strip_args(name):
+        if strip_arg_types is True:
+            return name.split("(", 1)[0]
+        else:
+            return name
+
+    demangled = idc.Demangle(name, idc.GetLongPrm(idc.INF_LONG_DN))
+    if demangled is not None:
+        return strip_args(demangled)
+
+    # The names in RTTI are not mangled normally, so try prepending
+    # the '_Z'
+    demangled = idc.Demangle("_Z" + name, idc.GetLongPrm(idc.INF_LONG_DN))
+    if demangled is not None:
+        return strip_args(demangled)
+
+    return strip_args(name)
