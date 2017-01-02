@@ -149,14 +149,7 @@ def parents_from_destructors(vtable):
                 if len(e.a) != 1:
                     return 0
 
-                # Strange two-step to get the address of the
-                # function being called by this expression.
-                #
-                # If anyone has a better way to do this, please
-                # let me know.
-                func_name = idc.GetOpnd(e.ea, 0)
-                addr = idaapi.get_name_ea(idc.BADADDR, func_name)
-
+                addr = e.x.obj_ea
                 type = get_type_having_destructor(addr)
                 if type is None:
                     return 0
@@ -259,14 +252,14 @@ class Type(object):
         lookups if this type was cast to 'parent'.
         '''
         def traverse_heirarchy(tree, target):
-            if len(tree) == 0:
+            if len(tree.parents) == 0:
                 return (1, False)
             total = 0
             found = False
-            for type, parents in tree.iteritems():
+            for type in tree.parents:
                 if type == target:
                     return (total, True)
-                count, found = traverse_heirarchy(parents, target)
+                count, found = traverse_heirarchy(type, target)
                 total += count
                 if found is True:
                     break
@@ -274,11 +267,11 @@ class Type(object):
         if self.vtable is None:
             return None
 
-        total, found = traverse_heirarchy(self.ancestors, parent)
+        total, found = traverse_heirarchy(self, parent)
         if found is False:
             return None
 
-        return self.vtable.subtables[total-1]
+        return self.vtable.subtables[total]
 
 
     def build_struct(self):

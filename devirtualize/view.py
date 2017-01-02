@@ -38,7 +38,33 @@ class ast_printer_t(idaapi.ctree_visitor_t):
         return 0
 
 
+from ctypes import *
 def translate_vptr_references(cfunc):
+
+    def set_obj_ea(expr, val):
+        ''' This function is an unholy incantation. Every time it is called
+        it is as if millions of voices cry out all at once and are suddenly
+        silenced. But, for the time being, it is necessary. So here goes:
+
+        In the IDA AST representation, function calls (cot_call) have one
+        child for each argument, and an additional child for the 'object'
+        doing the call. For normal function calls this child will be a
+        cot_obj, but it will be a pointer for function pointer calls.
+
+        We need to replace this child (it will be the x operand) in the
+        virtual function calls with a cot_obj once we have resolved the
+        function. This is a simple procedure in principle, we just create
+        a new cexpr_t and set 'op', 'type', and 'obj_ea' to the necessary
+        values. However the python API currently has no way to set the
+        'obj_ea'. To work around this without the C++ API, we use ctypes
+        to access the appropriate offset from the this pointer and modify
+        the value directly. Obviously this will break if the layout of
+        cexpr_t or its parents change (i.e., with 64bit builds), but it
+        is the best we can do for now.
+        '''
+        c_ulonglong_p = POINTER(c_ulonglong)
+        cast(int(expr.this)+20, c_ulonglong_p).contents.value = val
+
     class vptr_translator_t(idaapi.ctree_visitor_t):
         ''' The translator converts the virtual function callsites in the
         ast into normal function calls. This process requires a few pieces
@@ -115,13 +141,13 @@ def translate_vptr_references(cfunc):
                         self.index = 0
 
                     func = subtable.functions[self.index]
-                    name = demangle(idc.Name(func), strip_arg_types=True)
 
-                    replacement = idaapi.call_helper(self.func.type,
-                                                     self.func.a,
-                                                     name)
-                    replacement.ea = e.ea
-                    self.func.replace_by(replacement)
+                    obj = idaapi.cexpr_t()
+                    obj.op = idaapi.cot_obj
+                    obj.type = self.func.x.type
+                    set_obj_ea(obj, func)
+
+                    obj.swap(self.func.x)
                     self.reset()
             return 0
 
@@ -129,14 +155,12 @@ def translate_vptr_references(cfunc):
     translator = vptr_translator_t() # ast_printer_t()
     translator.apply_to(cfunc.body, None)
 
+
 def translator_callback(event, *args):
     if event == idaapi.hxe_maturity:
         cfunc, maturity = args
         if maturity == idaapi.CMAT_FINAL:
             translate_vptr_references(cfunc)
-    # elif event == idaapi.hxe_double_click:
-    #     vu, shift_state = args
-
     return 0
 
 

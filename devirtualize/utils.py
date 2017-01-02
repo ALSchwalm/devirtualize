@@ -50,10 +50,7 @@ def in_same_segment(addr1, addr2):
             idaapi.getseg(addr2).startEA)
 
 def as_signed(value, size):
-    if value > 1 << (size*8 - 1):
-        return value - (1 << (size*8))
-    else:
-        return value
+    return idaapi.as_signed(value, size*8)
 
 def demangle(name, strip_arg_types=False):
     def strip_args(name):
