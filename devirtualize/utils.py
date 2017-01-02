@@ -70,3 +70,9 @@ def demangle(name, strip_arg_types=False):
         return strip_args(demangled)
 
     return strip_args(name)
+
+def tinfo_for_ea(ea):
+    byte_info = idc.GetTinfo(ea)
+    t = idaapi.tinfo_t()
+    t.deserialize(idaapi.cvar.idati, byte_info[0], byte_info[1])
+    return t

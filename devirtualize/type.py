@@ -191,7 +191,10 @@ class Type(object):
             else:
                 self._name = "type_{:02x}".format(id(self))
         else:
-            self._name = demangle(self.typeinfo.name)
+            if self.typeinfo.name is None:
+                self._name = "type_{:02x}".format(self.typeinfo.ea)
+            else:
+                self._name = demangle(self.typeinfo.name)
 
     def __eq__(self, other):
         if self.vtable is not None:
