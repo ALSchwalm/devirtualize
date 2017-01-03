@@ -39,7 +39,7 @@ class ItaniumTypeInfo(object):
             self.parents.append(ItaniumTypeInfo(baseaddr))
 
             # For now ignore the '__offset_flags'
-            ea += 8
+            ea += TARGET_ADDRESS_SIZE
 
 class ItaniumSubVtable(object):
     def __init__(self, ea):
