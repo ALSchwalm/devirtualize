@@ -77,6 +77,8 @@ def demangle(name, strip_arg_types=False):
 
 def tinfo_for_ea(ea):
     byte_info = idc.GetTinfo(ea)
+    if byte_info is None:
+        return None
     t = idaapi.tinfo_t()
     t.deserialize(idaapi.cvar.idati, byte_info[0], byte_info[1])
     return t

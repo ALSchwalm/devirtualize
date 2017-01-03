@@ -150,22 +150,24 @@ def translate_vptr_references(cfunc):
                     obj = idaapi.cexpr_t()
                     obj.op = idaapi.cot_obj
                     t = tinfo_for_ea(func)
-                    t.create_ptr(t)
-                    obj.type = t
+                    if t is not None:
+                        t.create_ptr(t)
+                        obj.type = t
+
+                        #FIXME: this is a quick fix to correct the number of
+                        # args to agree with the function type. Type info is
+                        # still not propagated correctly. This might be fixed
+                        # by running the visitor at an earlier maturity, but
+                        # it is more difficult to identify virtual calls at
+                        # earlier stages.
+                        self.func.a.resize(t.get_nargs())
+                    else:
+                        obj.type = self.func.x.type
                     set_obj_ea(obj, func)
 
                     # Replace the existing func object (the virtual function
                     # pointer) with the new cot_obj
                     obj.swap(self.func.x)
-
-                    #FIXME: this is a quick fix to correct the number of
-                    # args to agree with the function type. Type info is
-                    # still not propagated correctly. This might be fixed
-                    # by running the visitor at an earlier maturity, but
-                    # it is more difficult to identify virtual calls at
-                    # earlier stages.
-                    self.func.a.resize(t.get_nargs())
-
                     self.reset()
             return 0
 

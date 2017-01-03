@@ -329,6 +329,25 @@ class Type(object):
             idc.SetType(idc.GetMemberId(self.struct, -offset),
                         parent.name);
 
+    def fixup_this_arg_types(self):
+        if self.vtable is None:
+            return
+        for subtable in self.vtable.subtables:
+            for func_addr in subtable.functions:
+                cfunc = idaapi.decompile(func_addr)
+                tinfo = idaapi.tinfo_t()
+                tinfo.get_named_type(idaapi.cvar.idati, self.name)
+                tinfo.create_ptr(tinfo)
+
+                #TODO: add missing this argument?
+                if len(cfunc.arguments) == 0:
+                    continue
+
+                cfunc.arguments[0].set_lvar_type(tinfo)
+                cfunc.arguments[0].name = "this"
+
+                cfunc.get_func_type(tinfo)
+                idaapi.set_tinfo2(func_addr, tinfo)
 
     def __str__(self):
         return self.name
@@ -336,31 +355,11 @@ class Type(object):
     def __repr__(self):
         return str(self)
 
-def func_type_ptr(cfunc):
-    tinfo = idaapi.tinfo_t()
-    cfunc.get_func_type(tinfo)
-    tinfo.create_ptr(tinfo)
-    return tinfo.dstr()
-
-def fixup_this_type(cfunc, func_addr, this_type):
-    tinfo = idaapi.tinfo_t()
-    tinfo.get_named_type(idaapi.cvar.idati, this_type)
-    tinfo.create_ptr(tinfo)
-
-    #TODO: add missing this argument
-    if len(cfunc.arguments) == 0:
-        return
-
-    cfunc.arguments[0].set_lvar_type(tinfo)
-    cfunc.arguments[0].name = "this"
-
-    cfunc.get_func_type(tinfo)
-    idaapi.set_tinfo2(func_addr, tinfo)
-
 def build_types():
     idc.AddStrucEx(-1, "_vfunc", 0)
     for t in Types():
         t.build_struct()
+        t.fixup_this_arg_types()
     save_type_info()
 
 print([t.name for t in Types()])
