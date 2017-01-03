@@ -22,6 +22,10 @@ elif INFO.is_32bit():
 else:
     raise RuntimeError("Platform is not 64 or 32 bit")
 
+from .netnode import Netnode
+def netnode():
+    return Netnode("$ devirtualize")
+
 def get_address(ea):
     if TARGET_ADDRESS_SIZE == 8:
         res = idaapi.get_64bit(ea)

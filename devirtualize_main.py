@@ -18,19 +18,15 @@ class devirtualize_plugin_t(idaapi.plugin_t):
         return idaapi.PLUGIN_OK
 
     def run(self, arg):
-        import traceback
-        idaapi.require('devirtualize')
-        idaapi.require('devirtualize.netnode')
-        node = devirtualize.netnode.Netnode("$ devirtualize")
-
         try:
+            import traceback
+            idaapi.require('devirtualize')
             idaapi.require('devirtualize.type')
+            idaapi.require('devirtualize.view')
+            devirtualize.view.register_vptr_translator()
+            idaapi.msg('devirtualize_plugin:run\n')
         except:
             idaapi.msg(traceback.format_exc())
-
-        idaapi.require('devirtualize.view')
-        devirtualize.view.register_vptr_translator()
-        idaapi.msg('devirtualize_plugin:run\n')
 
     def term(self):
         pass

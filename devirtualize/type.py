@@ -1,6 +1,7 @@
 import idaapi
 import idautils
 import idc
+import pickle
 
 from .utils import *
 
@@ -57,6 +58,9 @@ def type_matching_typeinfo(types, typeinfo):
             return type
     return None
 
+def save_type_info():
+    netnode()["saved_types"] = pickle.dumps(Types())
+
 def Types(regenerate=False):
     def add_parents(types, typeinfo):
         for parent in typeinfo.parents:
@@ -80,10 +84,13 @@ def Types(regenerate=False):
                 p.children.append(type)
                 type.parents.append(p)
 
-    if regenerate is True or Types.cache is None:
+    if regenerate is True or ("saved_types" in netnode() and Types.cache is None):
+        Types.cache = pickle.loads(netnode()["saved_types"])
+
+    elif regenerate is True or Types.cache is None:
         Types.cache = []
-        for table in tables_from_heuristics():
-            vtable = VTable(table)
+        for table_ea in tables_from_heuristics():
+            vtable = VTable(table_ea)
 
             existing_type = type_matching_typeinfo(Types.cache, vtable.typeinfo)
             if existing_type:
@@ -95,6 +102,7 @@ def Types(regenerate=False):
                 add_parents(Types.cache, vtable.typeinfo)
 
         generate_type_relations(Types.cache)
+        save_type_info()
 
     return Types.cache
 Types.cache = None
@@ -353,6 +361,7 @@ def build_types():
     idc.AddStrucEx(-1, "_vfunc", 0)
     for t in Types():
         t.build_struct()
+    save_type_info()
 
 print([t.name for t in Types()])
 build_types()
