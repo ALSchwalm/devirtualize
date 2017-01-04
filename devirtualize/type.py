@@ -54,6 +54,8 @@ def type_matching_typeinfo(types, typeinfo):
     if typeinfo is None:
         return None
     for type in types:
+        if type.typeinfo is None:
+            continue
         if type.typeinfo.ea == typeinfo.ea:
             return type
     return None
@@ -84,7 +86,7 @@ def Types(regenerate=False):
                 p.children.append(type)
                 type.parents.append(p)
 
-    if regenerate is True or ("saved_types" in netnode() and Types.cache is None):
+    if regenerate is False and "saved_types" in netnode() and Types.cache is None:
         Types.cache = pickle.loads(netnode()["saved_types"])
 
     elif regenerate is True or Types.cache is None:
@@ -113,69 +115,86 @@ def get_type_by_name(name):
             return t
     return None
 
-def destructor_calls(vtable):
-    candidates = []
-
-    # For now just use the first subtable array
-    primary_table = vtable.subtables[0]
-
-    for ref in idautils.XrefsTo(primary_table.functions_ea):
-        start = as_signed(idc.GetFunctionAttr(ref.frm, idc.FUNCATTR_START),
-                          TARGET_ADDRESS_SIZE)
-        if start == -1:
-            continue
-        candidates.append(start)
-
-    #TODO: don't assume the destructor is virtual
-    candidates = [c for c in candidates if c in primary_table.functions]
-    return candidates
-
-def get_type_having_destructor(func_ea):
-    for type in Types():
-        if type.vtable is None:
-            continue
-        if func_ea in destructor_calls(type.vtable):
-            return type
-    return None
-
-
+#TODO:
+#  1. Consider inlined destructors (or children of abstract types)
+#  2. Multiple inheritance
 def parents_from_destructors(vtable):
-    #TODO: consider other candidates
-    destructor = destructor_calls(vtable)[0]
+    def destructor_calls(vtable):
+        from itertools import chain
+        candidates = []
 
-    parents = []
-    cfunc = idaapi.decompile(destructor);
+        if vtable is None:
+            return []
+
+        # For now just use the first subtable array
+        primary_table = vtable.subtables[0]
+
+        # When debug symbols are present, the decompile will usually
+        # refer to the function subtable as an offset from the start
+        # of the vtable, so also allow references to that.
+        references = chain(idautils.XrefsTo(primary_table.functions_ea),
+                           idautils.XrefsTo(vtable.ea))
+
+        for ref in references:
+            start = as_signed(idc.GetFunctionAttr(ref.frm, idc.FUNCATTR_START),
+                              TARGET_ADDRESS_SIZE)
+            if start == -1:
+                continue
+            candidates.append(start)
+
+        #TODO: don't assume the destructor is virtual
+        candidates = [c for c in candidates if c in primary_table.functions]
+        return candidates
+
+    def get_type_having_destructor(func_ea):
+        for type in Types():
+            if type.vtable is None:
+                continue
+            if func_ea in destructor_calls(type.vtable):
+                return type
+        return None
 
     class destructor_finder_t(idaapi.ctree_visitor_t):
         def __init__(self, ea):
             idaapi.ctree_visitor_t.__init__(self, idaapi.CV_FAST)
-            self.destructor_candidate = None
 
         def visit_expr(self, e):
             if e.op == idaapi.cot_call:
                 # Destructors only take 1 arg
                 if len(e.a) != 1:
                     return 0
+                elif e.a[0].v is None or e.a[0].v.idx != 0:
+                    return 0
 
                 addr = e.x.obj_ea
                 type = get_type_having_destructor(addr)
                 if type is None:
                     return 0
-
-                self.destructor_candidate = (e, type)
+                parents.append(type)
                 return 0
-            elif e.op == idaapi.cot_var:
-                if (self.destructor_candidate is None or
-                    not e.is_call_arg_of(self.destructor_candidate[0]) or
-                    e.v.idx != 0):
-                    return 0
-                parents.append(self.destructor_candidate[1])
+
+            elif e.op == idaapi.cot_asg:
+                pass
+
             return 0
 
         def leave_expr(self, e):
             if e.op == idaapi.cot_call:
                 self.destructor_candidate = None
 
+
+    #TODO: consider other candidates
+    destructors = destructor_calls(vtable)
+
+    if len(destructors) == 0:
+        return []
+    destructor = destructors[0]
+    parents = []
+
+    try:
+        cfunc = idaapi.decompile(destructor);
+    except idaapi.DecompilationFailure:
+        return []
 
     iff = destructor_finder_t(destructor)
     iff.apply_to(cfunc.body, None)
@@ -258,6 +277,12 @@ class Type(object):
         #TODO: rename struct
         self._name = newname
 
+    @property
+    def tinfo(self):
+        tinfo = idaapi.tinfo_t()
+        tinfo.get_named_type(idaapi.cvar.idati, self.name)
+        return tinfo
+
     def subtable_for_cast(self, parent):
         ''' Returns the subtable that would be used for virtual function
         lookups if this type was cast to 'parent'.
@@ -335,8 +360,7 @@ class Type(object):
         for subtable in self.vtable.subtables:
             for func_addr in subtable.functions:
                 cfunc = idaapi.decompile(func_addr)
-                tinfo = idaapi.tinfo_t()
-                tinfo.get_named_type(idaapi.cvar.idati, self.name)
+                tinfo = self.tinfo
                 tinfo.create_ptr(tinfo)
 
                 #TODO: add missing this argument?
@@ -359,8 +383,8 @@ def build_types():
     idc.AddStrucEx(-1, "_vfunc", 0)
     for t in Types():
         t.build_struct()
-        t.fixup_this_arg_types()
+        #t.fixup_this_arg_types()
     save_type_info()
 
-print([t.name for t in Types()])
-build_types()
+# print([t.name for t in Types()])
+# build_types()

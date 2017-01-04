@@ -41,6 +41,10 @@ class ItaniumTypeInfo(object):
             # For now ignore the '__offset_flags'
             ea += TARGET_ADDRESS_SIZE
 
+    @property
+    def str_ea(self):
+        return "{:02x}".format(self.ea)
+
 class ItaniumSubVtable(object):
     def __init__(self, ea):
         self.ea = ea
@@ -92,6 +96,10 @@ class ItaniumSubVtable(object):
             return None
         return self.typeinfo.name
 
+    @property
+    def str_ea(self):
+        return "{:02x}".format(self.ea)
+
 class ItaniumVTable(object):
     def __init__(self, ea):
         self.ea = ea
@@ -134,3 +142,7 @@ class ItaniumVTable(object):
         if prim.typeinfo is not None:
             return prim.name
         return None
+
+    @property
+    def str_ea(self):
+        return "{:02x}".format(self.ea)
