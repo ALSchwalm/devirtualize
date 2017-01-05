@@ -126,6 +126,14 @@ def get_type_by_func(ea):
                     res = t
     return res
 
+def get_type_by_tinfo(tinfo):
+    while tinfo.remove_ptr_or_array():
+        continue
+    for t in Types():
+        if t.tinfo == tinfo:
+            return t
+    return None
+
 #TODO:
 #  1. Consider inlined destructors (or children of abstract types)
 #  2. Multiple inheritance

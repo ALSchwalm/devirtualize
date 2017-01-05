@@ -24,9 +24,11 @@ class devirtualize_plugin_t(idaapi.plugin_t):
             idaapi.require('devirtualize')
             idaapi.require('devirtualize.type')
             idaapi.require('devirtualize.view')
+            idaapi.require('devirtualize.graph')
 
             devirtualize.type.build_types()
             devirtualize.view.register_vptr_translator()
+            devirtualize.graph.register_actions()
             idaapi.msg('devirtualize_plugin:finished\n')
         except:
             idaapi.msg(traceback.format_exc())
