@@ -18,13 +18,16 @@ class devirtualize_plugin_t(idaapi.plugin_t):
         return idaapi.PLUGIN_OK
 
     def run(self, arg):
+        import traceback
         try:
-            import traceback
+            idaapi.msg('devirtualize_plugin:starting\n')
             idaapi.require('devirtualize')
             idaapi.require('devirtualize.type')
             idaapi.require('devirtualize.view')
+
+            devirtualize.type.build_types()
             devirtualize.view.register_vptr_translator()
-            idaapi.msg('devirtualize_plugin:run\n')
+            idaapi.msg('devirtualize_plugin:finished\n')
         except:
             idaapi.msg(traceback.format_exc())
 

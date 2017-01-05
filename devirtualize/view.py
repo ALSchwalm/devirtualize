@@ -3,7 +3,7 @@ import idautils
 import idc
 
 from .utils import *
-from .type import get_type_by_name
+from .type import get_type_by_name, fixup_this_arg_types
 
 def translate_vptr_references(cfunc):
     def set_obj_ea(expr, val):
@@ -142,11 +142,12 @@ def translate_vptr_references(cfunc):
     translator = vptr_translator_t()
     translator.apply_to_exprs(cfunc.body, None)
 
-
 def translator_callback(event, *args):
     if event == idaapi.hxe_maturity:
         cfunc, maturity = args
-        if maturity == idaapi.CMAT_FINAL:
+        if maturity == idaapi.CMAT_BUILT:
+            fixup_this_arg_types(cfunc)
+        elif maturity == idaapi.CMAT_FINAL:
             translate_vptr_references(cfunc)
     return 0
 

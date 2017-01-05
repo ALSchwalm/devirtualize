@@ -115,6 +115,17 @@ def get_type_by_name(name):
             return t
     return None
 
+def get_type_by_func(ea):
+    res = None
+    for t in Types():
+        if t.vtable is None:
+            continue
+        for sub in t.vtable.subtables:
+            for func in sub.functions:
+                if func == ea and (res is None or t.is_ancestor_of(res)):
+                    res = t
+    return res
+
 #TODO:
 #  1. Consider inlined destructors (or children of abstract types)
 #  2. Multiple inheritance
@@ -240,12 +251,24 @@ class Type(object):
             ancestors[p] = p.ancestors
         return ancestors
 
+    def is_descendant_of(self, other):
+        for p in self.parents:
+            if p == other or p.is_descendant_of(other):
+                return True
+        return False
+
     @property
     def descendants(self):
         descendants = {}
         for c in self.children:
             descendants[c] = c.descendants
         return descendants
+
+    def is_ancestor_of(self, other):
+        for c in self.children:
+            if c == other or c.is_ancestor_of(other):
+                return True
+        return False
 
     @property
     def family(self):
@@ -300,6 +323,7 @@ class Type(object):
                 if found is True:
                     break
             return (total, found)
+
         if self.vtable is None:
             return None
 
@@ -354,37 +378,37 @@ class Type(object):
             idc.SetType(idc.GetMemberId(self.struct, -offset),
                         parent.name);
 
-    def fixup_this_arg_types(self):
-        if self.vtable is None:
-            return
-        for subtable in self.vtable.subtables:
-            for func_addr in subtable.functions:
-                cfunc = idaapi.decompile(func_addr)
-                tinfo = self.tinfo
-                tinfo.create_ptr(tinfo)
-
-                #TODO: add missing this argument?
-                if len(cfunc.arguments) == 0:
-                    continue
-
-                cfunc.arguments[0].set_lvar_type(tinfo)
-                cfunc.arguments[0].name = "this"
-
-                cfunc.get_func_type(tinfo)
-                idaapi.set_tinfo2(func_addr, tinfo)
-
     def __str__(self):
         return self.name
 
     def __repr__(self):
         return str(self)
 
+
+def fixup_this_arg_types(cfunc):
+    # Don't do anything if the type has already been set
+    if idc.GetType(cfunc.entry_ea) is not None:
+        return
+
+    t = get_type_by_func(cfunc.entry_ea)
+    if t is None:
+        return
+
+    tinfo = t.tinfo
+    tinfo.create_ptr(tinfo)
+
+    #TODO: add missing this argument?
+    if len(cfunc.arguments) == 0:
+        return
+
+    cfunc.arguments[0].set_lvar_type(tinfo)
+    cfunc.arguments[0].name = "this"
+
+    cfunc.get_func_type(tinfo)
+    idaapi.set_tinfo2(cfunc.entry_ea, tinfo)
+
 def build_types():
     idc.AddStrucEx(-1, "_vfunc", 0)
     for t in Types():
         t.build_struct()
-        #t.fixup_this_arg_types()
     save_type_info()
-
-# print([t.name for t in Types()])
-# build_types()
