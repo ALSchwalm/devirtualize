@@ -104,12 +104,12 @@ def translate_vptr_references(cfunc):
                     this_type = get_type_by_name(self.type.dstr())
 
                     cast_type = get_type_by_name(self.cast_type.dstr())
-                    subtable = this_type.subtable_for_cast(cast_type)
+                    table = this_type.table_for_cast(cast_type)
 
                     if self.index is None:
                         self.index = 0
 
-                    func = subtable.functions[self.index]
+                    func = table.functions[self.index]
 
                     # Create a new cot_obj expression and fill it with
                     # the ea of the function. Also use the type of the

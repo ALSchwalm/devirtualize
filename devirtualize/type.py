@@ -7,7 +7,7 @@ from .utils import *
 
 if VTABLE_ABI == "ITANIUM":
     from .itanium import ItaniumTypeInfo as TypeInfo
-    from .itanium import ItaniumVTable as VTable
+    from .itanium import ItaniumVTableGroup as VTableGroup
 else:
     raise RuntimeError("Unsupported vtable ABI")
     # from .msvc import MSVCTypeInfo as TypeInfo
@@ -34,7 +34,7 @@ def tables_from_heuristics(require_rtti=False):
         ea = seg.startEA
         while ea < seg.endEA:
             try:
-                table = VTable(ea)
+                table = VTableGroup(ea)
                 if require_rtti is True and ea.typeinfo is not None:
                     yield ea
                 elif require_rtti is False:
@@ -80,7 +80,7 @@ def Types(regenerate=False):
                 parents = [type_matching_typeinfo(types, p)
                            for p in type.typeinfo.parents]
             else:
-                parents = parents_from_destructors(type.vtable)
+                parents = parents_from_destructors(type.tablegroup)
 
             for p in parents:
                 p.children.append(type)
@@ -92,16 +92,16 @@ def Types(regenerate=False):
     elif regenerate is True or Types.cache is None:
         Types.cache = []
         for table_ea in tables_from_heuristics():
-            vtable = VTable(table_ea)
+            tablegroup = VTableGroup(table_ea)
 
-            existing_type = type_matching_typeinfo(Types.cache, vtable.typeinfo)
+            existing_type = type_matching_typeinfo(Types.cache, tablegroup.typeinfo)
             if existing_type:
-                existing_type.vtable = vtable
+                existing_type.tablegroup = tablegroup
             else:
-                Types.cache.append(Type(vtable, vtable.typeinfo))
+                Types.cache.append(Type(tablegroup, tablegroup.typeinfo))
 
-            if vtable.typeinfo:
-                add_parents(Types.cache, vtable.typeinfo)
+            if tablegroup.typeinfo:
+                add_parents(Types.cache, tablegroup.typeinfo)
 
         generate_type_relations(Types.cache)
         save_type_info()
@@ -118,10 +118,10 @@ def get_type_by_name(name):
 def get_type_by_func(ea):
     res = None
     for t in Types():
-        if t.vtable is None:
+        if t.tablegroup is None:
             continue
-        for sub in t.vtable.subtables:
-            for func in sub.functions:
+        for table in t.tablegroup.tables:
+            for func in table.functions:
                 if func == ea and (res is None or t.is_ancestor_of(res)):
                     res = t
     return res
@@ -137,22 +137,22 @@ def get_type_by_tinfo(tinfo):
 #TODO:
 #  1. Consider inlined destructors (or children of abstract types)
 #  2. Multiple inheritance
-def parents_from_destructors(vtable):
-    def destructor_calls(vtable):
+def parents_from_destructors(tablegroup):
+    def destructor_calls(tablegroup):
         from itertools import chain
         candidates = []
 
-        if vtable is None:
+        if tablegroup is None:
             return []
 
-        # For now just use the first subtable array
-        primary_table = vtable.subtables[0]
+        # For now just use the first table array
+        primary_table = tablegroup.primary_table()
 
         # When debug symbols are present, the decompile will usually
-        # refer to the function subtable as an offset from the start
+        # refer to the function table as an offset from the start
         # of the vtable, so also allow references to that.
-        references = chain(idautils.XrefsTo(primary_table.functions_ea),
-                           idautils.XrefsTo(vtable.ea))
+        references = chain(idautils.XrefsTo(primary_table.address_point),
+                           idautils.XrefsTo(tablegroup.ea))
 
         for ref in references:
             start = as_signed(idc.GetFunctionAttr(ref.frm, idc.FUNCATTR_START),
@@ -167,9 +167,9 @@ def parents_from_destructors(vtable):
 
     def get_type_having_destructor(func_ea):
         for type in Types():
-            if type.vtable is None:
+            if type.tablegroup is None:
                 continue
-            if func_ea in destructor_calls(type.vtable):
+            if func_ea in destructor_calls(type.tablegroup):
                 return type
         return None
 
@@ -203,7 +203,7 @@ def parents_from_destructors(vtable):
 
 
     #TODO: consider other candidates
-    destructors = destructor_calls(vtable)
+    destructors = destructor_calls(tablegroup)
 
     if len(destructors) == 0:
         return []
@@ -220,11 +220,11 @@ def parents_from_destructors(vtable):
     return parents
 
 class Type(object):
-    def __init__(self, vtable=None, typeinfo=None):
-        if vtable is None and typeinfo is None:
-            raise ValueError("Either 'vtable' or 'typeinfo' must be non-None")
+    def __init__(self, tablegroup=None, typeinfo=None):
+        if tablegroup is None and typeinfo is None:
+            raise ValueError("Either 'tablegroup' or 'typeinfo' must be non-None")
 
-        self.vtable = vtable
+        self.tablegroup = tablegroup
         self.typeinfo = typeinfo
 
         self.parents = []
@@ -232,8 +232,8 @@ class Type(object):
         self.struct = None
 
         if self.typeinfo is None:
-            if self.vtable is not None:
-                self._name = "type_{:02x}".format(self.vtable.ea)
+            if self.tablegroup is not None:
+                self._name = "type_{:02x}".format(self.tablegroup.ea)
             else:
                 self._name = "type_{:02x}".format(id(self))
         else:
@@ -243,10 +243,10 @@ class Type(object):
                 self._name = demangle(self.typeinfo.name)
 
     def __eq__(self, other):
-        if self.vtable is not None:
-            if other.vtable is None:
+        if self.tablegroup is not None:
+            if other.tablegroup is None:
                 return False
-            return self.vtable.ea == other.vtable.ea
+            return self.tablegroup.ea == other.tablegroup.ea
         else:
             if other.typeinfo is None:
                 return False
@@ -314,8 +314,8 @@ class Type(object):
         tinfo.get_named_type(idaapi.cvar.idati, self.name)
         return tinfo
 
-    def subtable_for_cast(self, parent):
-        ''' Returns the subtable that would be used for virtual function
+    def table_for_cast(self, parent):
+        ''' Returns the table that would be used for virtual function
         lookups if this type was cast to 'parent'.
         '''
         def traverse_heirarchy(tree, target):
@@ -339,7 +339,7 @@ class Type(object):
         if found is False:
             return None
 
-        return self.vtable.subtables[total]
+        return self.tablegroup.tables[total]
 
 
     def build_struct(self):
@@ -372,7 +372,7 @@ class Type(object):
 
         for i, parent in enumerate(self.parents):
             try:
-                offset = self.vtable.subtables[i].baseoffset
+                offset = self.tablegroup.tables[i].baseoffset
             except:
                 break
 

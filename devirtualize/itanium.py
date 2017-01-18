@@ -45,7 +45,7 @@ class ItaniumTypeInfo(object):
     def str_ea(self):
         return "{:02x}".format(self.ea)
 
-class ItaniumSubVtable(object):
+class ItaniumVtable(object):
     def __init__(self, ea):
         self.ea = ea
 
@@ -54,26 +54,26 @@ class ItaniumSubVtable(object):
 
         # Arbitrary bounds for offset size
         if self.baseoffset < -0xFFFFFF or self.baseoffset > 0xFFFFFF:
-            raise ValueError("Invalid subtable address `0x{:02x}`".format(self.ea))
+            raise ValueError("Invalid table address `0x{:02x}`".format(self.ea))
 
         ea, typeinfo = get_address(ea)
         self.typeinfo = None
 
         if typeinfo != 0:
             if not in_same_segment(typeinfo, self.ea):
-                raise ValueError("Invalid subtable address `0x{:02x}`".format(self.ea))
+                raise ValueError("Invalid table address `0x{:02x}`".format(self.ea))
             else:
                 self.typeinfo = ItaniumTypeInfo(typeinfo)
 
         self.functions = []
 
         # The start of the function array
-        self.functions_ea = ea
+        self.address_point = ea
 
         while True:
             ea, func = get_address(ea)
 
-            # The first two functions can be 0
+            # The first few function pointers can be 0
             if not is_in_executable_segment(func):
                 if func == 0 and all([f == 0 for f in self.functions]):
                     pass
@@ -86,7 +86,7 @@ class ItaniumSubVtable(object):
         # pointer and base offset can also be zero, require at least
         # one function to not be zero (so blocks of zero don't match).
         if all([f == 0 for f in self.functions]):
-            raise ValueError("Invalid subtable address `0x{:02x}`".format(self.ea))
+            raise ValueError("Invalid table address `0x{:02x}`".format(self.ea))
 
         self.size = TARGET_ADDRESS_SIZE*(len(self.functions) + 2)
 
@@ -100,45 +100,45 @@ class ItaniumSubVtable(object):
     def str_ea(self):
         return "{:02x}".format(self.ea)
 
-class ItaniumVTable(object):
+class ItaniumVTableGroup(object):
     def __init__(self, ea):
         self.ea = ea
-        self.subtables = []
+        self.tables = []
 
         prev_offset = None
         while True:
             try:
-                subtable = ItaniumSubVtable(ea)
+                table = ItaniumVtable(ea)
             except:
                 break
 
             # Sanity check the offset
-            if prev_offset is None and subtable.baseoffset != 0:
+            if prev_offset is None and table.baseoffset != 0:
                 break
-            elif prev_offset is not None and subtable.baseoffset >= prev_offset:
+            elif prev_offset is not None and table.baseoffset >= prev_offset:
                 break
 
-            prev_offset = subtable.baseoffset
-            self.subtables.append(subtable)
-            ea += subtable.size
+            prev_offset = table.baseoffset
+            self.tables.append(table)
+            ea += table.size
 
-        if not self.subtables:
-            raise ValueError("Invalid vtable address `0x{:02x}`".format(self.ea))
+        if not self.tables:
+            raise ValueError("Invalid vtable group address `0x{:02x}`".format(self.ea))
 
-    def _primary_table(self):
-        return self.subtables[0]
+    def primary_table(self):
+        return self.tables[0]
 
     @property
     def typeinfo(self):
-        return self._primary_table().typeinfo
+        return self.primary_table().typeinfo
 
     @property
     def size(self):
-        return sum([s.size for s in self.subtables])
+        return sum([s.size for s in self.tables])
 
     @property
     def name(self):
-        prim = self._primary_table()
+        prim = self.primary_table()
         if prim.typeinfo is not None:
             return prim.name
         return None

@@ -63,6 +63,7 @@ def register_actions():
     idaapi.install_hexrays_callback(graph_callback)
 
 
+#TODO: Show diamond inheritance as a diamond
 class TypeGraph(idaapi.GraphViewer):
     def __init__(self, type, relationship="ancestors"):
         idaapi.GraphViewer.__init__(self, "Type Graph for {} of {}".format(
