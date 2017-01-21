@@ -19,3 +19,8 @@ Usage
 Copy the "devirtualize" folder and "devirtualize_main.py" files to your IDA "plugins" 
 directory. Execute the initial type construction with Edit->Plugins->Devirtualize.
 After this, virtual functions will be converted whenever the plugin is able.
+
+Documentation
+=============
+
+Documentation and additional usage info is available [here](https://devirtualize.readthedocs.io/en/latest/index.html)
