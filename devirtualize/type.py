@@ -1,3 +1,6 @@
+''' This module defines the generic Type interface for different ABIs.
+'''
+
 import idaapi
 import idautils
 import idc
@@ -15,6 +18,8 @@ else:
 
 
 def tables_from_names():
+    ''' Yields addresses of VtableGroups if binary is not stripped
+    '''
     for n in idautils.Names():
         seg = idaapi.getseg(n[0])
         if seg is None or seg.type != idaapi.SEG_DATA:
@@ -24,6 +29,8 @@ def tables_from_names():
             yield n[0]
 
 def tables_from_heuristics(require_rtti=False):
+    ''' Yields addresses of VTableGroups found via heuristic methods
+    '''
     for s in idautils.Segments():
         seg = idaapi.getseg(s)
         if seg is None:
@@ -44,13 +51,9 @@ def tables_from_heuristics(require_rtti=False):
                 # Assume vtables are aligned
                 ea += TARGET_ADDRESS_SIZE
 
-def Vtables(regenerate=False):
-    if regenerate is True or Vtables.cache is None:
-        Vtables.cache = list([VTable(t) for t in tables_from_heuristics()])
-    return Vtables.cache
-Vtables.cache = None
-
 def type_matching_typeinfo(types, typeinfo):
+    ''' Get the type in ``types`` that is associated with ``typeinfo``.
+    '''
     if typeinfo is None:
         return None
     for type in types:
@@ -61,9 +64,14 @@ def type_matching_typeinfo(types, typeinfo):
     return None
 
 def save_type_info():
+    ''' Save the current state/relationships between types. This
+    essentially 'saves' the Devirtualize plugin.
+    '''
     netnode()["saved_types"] = pickle.dumps(Types())
 
 def Types(regenerate=False):
+    ''' Returns a memoized list of Type objects for this binary
+    '''
     def add_parents(types, typeinfo):
         for parent in typeinfo.parents:
             existing_type = type_matching_typeinfo(types, parent)
@@ -110,12 +118,18 @@ def Types(regenerate=False):
 Types.cache = None
 
 def get_type_by_name(name):
+    ''' Returns any type object matching ``name``
+    '''
     for t in Types():
         if t.name == name:
             return t
     return None
 
 def get_type_by_func(ea):
+    ''' Returns a Type with ``ea`` in its vtable. If there are multiple
+    such types, the least derived type is returned (or the 1st found, if
+    the multiple types have no known inheritance relationship).
+    '''
     res = None
     for t in Types():
         if t.tablegroup is None:
@@ -127,6 +141,8 @@ def get_type_by_func(ea):
     return res
 
 def get_type_by_tinfo(tinfo):
+    ''' Returns the Type that has a struct with the associated ``tinfo``
+    '''
     while tinfo.remove_ptr_or_array():
         continue
     for t in Types():
@@ -138,6 +154,9 @@ def get_type_by_tinfo(tinfo):
 #  1. Consider inlined destructors (or children of abstract types)
 #  2. Multiple inheritance
 def parents_from_destructors(tablegroup):
+    ''' Finds the direct parents of the Type associated with ``tablegroup`` by
+    examining function calls in its destructor.
+    '''
     def destructor_calls(tablegroup):
         from itertools import chain
         candidates = []
@@ -220,14 +239,24 @@ def parents_from_destructors(tablegroup):
     return parents
 
 class Type(object):
+    ''' This is the fundamental type in ``Devirtualize``. `Type` is a flexible
+    representation of a type that existed during compilation. Such a type may be
+    discovered via RTTI or the presence of a TableGroup.
+    '''
     def __init__(self, tablegroup=None, typeinfo=None):
         if tablegroup is None and typeinfo is None:
             raise ValueError("Either 'tablegroup' or 'typeinfo' must be non-None")
 
+        #: Handle to the TableGroup backing this type (if any)
         self.tablegroup = tablegroup
+
+        #: Handle to the RTTI typeinfo for this type (if any)
         self.typeinfo = typeinfo
 
+        #: A list of this type's parents in inheritance order
         self.parents = []
+
+        #: A list of this type's children
         self.children = []
         self.struct = None
 
@@ -254,12 +283,39 @@ class Type(object):
 
     @property
     def ancestors(self):
+        ''' A tree of the parent types for this type (and their parents, etc).
+
+        For a heirarchy like this::
+
+                    A   B
+                     \ /
+                      C   D
+                       \ /
+                        E
+
+        E's ancestors will be the nested dictionaries::
+
+                {
+                  C: {
+                    A: {},
+                    B: {}
+                  },
+                  D: {}
+                }
+
+        .. warning::
+           Remember that dictionary traversal is not ordered, so the first item
+           in the ancestors dictionary is not necessarily the first parent in
+           the parents list.
+        '''
         ancestors = {}
         for p in self.parents:
             ancestors[p] = p.ancestors
         return ancestors
 
     def is_descendant_of(self, other):
+        ''' Returns True if ``other`` is a direct or indirect parent of this Type.
+        '''
         for p in self.parents:
             if p == other or p.is_descendant_of(other):
                 return True
@@ -267,12 +323,36 @@ class Type(object):
 
     @property
     def descendants(self):
+        ''' A tree of the child types for this type (and their children, etc).
+
+        For a heirarchy like this::
+
+                         A
+                        / \ 
+                       B   C
+                      /   / \ 
+                     D   E   F
+
+        A's descendants will be the nested dictionaries::
+
+                {
+                  B: {
+                    D: {},
+                  },
+                  C: {
+                    E: {},
+                    F: {}
+                  }
+                }
+        '''
         descendants = {}
         for c in self.children:
             descendants[c] = c.descendants
         return descendants
 
     def is_ancestor_of(self, other):
+        ''' Returns True if ``other`` is a direct or indirect child of this Type.
+        '''
         for c in self.children:
             if c == other or c.is_ancestor_of(other):
                 return True
@@ -280,6 +360,9 @@ class Type(object):
 
     @property
     def family(self):
+        ''' The set of Types that are the direct/indirect children and parents
+        of this Type, as well as the children and parents of those types, recursively.
+        '''
         #TODO: memoize this
 
         # There really shouldn't be loops in this topology,
@@ -315,7 +398,7 @@ class Type(object):
         return tinfo
 
     def table_for_cast(self, parent):
-        ''' Returns the table that would be used for virtual function
+        ''' Finds the table that would be used for virtual function
         lookups if this type was cast to 'parent'.
         '''
         def traverse_heirarchy(tree, target):
@@ -343,6 +426,8 @@ class Type(object):
 
 
     def build_struct(self):
+        ''' Creates an IDA structure for this Type.
+        '''
         if self.struct is not None:
             return
 
@@ -372,7 +457,9 @@ class Type(object):
 
         for i, parent in enumerate(self.parents):
             try:
-                offset = self.tablegroup.tables[i].baseoffset
+                #TODO: for non-itanium ABI, this may not be available
+                #      when RTTI is disabled
+                offset = self.tablegroup.tables[i].offset_to_top
             except:
                 break
 
@@ -394,6 +481,9 @@ class Type(object):
 
 
 def fixup_this_arg_types(cfunc):
+    ''' Modifies a cfuncptr_t such that its first argument is a pointer
+    to the Type that has this cfunc in its vtable (and is named 'this')
+    '''
     # Don't do anything if the type has already been set
     if idc.GetType(cfunc.entry_ea) is not None:
         return

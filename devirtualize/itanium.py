@@ -1,16 +1,28 @@
+''' This modules implements vtable, vtablegroup and typeinfo for the Itanium ABI.
+For reference, read https://mentorembedded.github.io/cxx-abi/abi.html.
+'''
+
 import idaapi
 import idc
 
 from .utils import *
 
 class ItaniumTypeInfo(object):
+    ''' ItaniumTypeInfo is the RTTI typeinfo representation for the Itanium ABI.
+    '''
     def __init__(self, ea):
+
+        #: The address of the start of this RTTI object
         self.ea = ea
+
+        #: A list (in inheritance order) of the parent RTTI objects
         self.parents = []
 
         # first entry is the vptr for the typeinfo
         ea, _ = get_address(ea)
         ea, self.nameptr = get_address(ea)
+
+        #: The name present in this RTTI entry
         self.name = idc.GetString(self.nameptr)
 
         # After the name is either the base class typeinfo pointer
@@ -46,17 +58,24 @@ class ItaniumTypeInfo(object):
         return "{:02x}".format(self.ea)
 
 class ItaniumVtable(object):
+    ''' The Vtable representation for the Itanium ABI
+    '''
     def __init__(self, ea):
+        #: The address of the start of this vtable
         self.ea = ea
 
-        ea, baseoffset = get_address(ea)
-        self.baseoffset = as_signed(baseoffset, TARGET_ADDRESS_SIZE)
+        ea, offset_to_top = get_address(ea)
+
+        #: The offset to the top of the object for a subobject with this vtable
+        self.offset_to_top = as_signed(offset_to_top, TARGET_ADDRESS_SIZE)
 
         # Arbitrary bounds for offset size
-        if self.baseoffset < -0xFFFFFF or self.baseoffset > 0xFFFFFF:
+        if self.offset_to_top < -0xFFFFFF or self.offset_to_top > 0xFFFFFF:
             raise ValueError("Invalid table address `0x{:02x}`".format(self.ea))
 
         ea, typeinfo = get_address(ea)
+
+        #: Handle to the RTTI object associated with this vtable (if any)
         self.typeinfo = None
 
         if typeinfo != 0:
@@ -65,9 +84,10 @@ class ItaniumVtable(object):
             else:
                 self.typeinfo = ItaniumTypeInfo(typeinfo)
 
+        #: A list of function addresses in this vtable (some may be NULL)
         self.functions = []
 
-        # The start of the function array
+        #: The address of the start of the function array
         self.address_point = ea
 
         while True:
@@ -88,6 +108,7 @@ class ItaniumVtable(object):
         if all([f == 0 for f in self.functions]):
             raise ValueError("Invalid table address `0x{:02x}`".format(self.ea))
 
+        #: The size in bytes of this vtable
         self.size = TARGET_ADDRESS_SIZE*(len(self.functions) + 2)
 
     @property
@@ -98,11 +119,18 @@ class ItaniumVtable(object):
 
     @property
     def str_ea(self):
+        ''' A string representation of ``self.ea``, in hex. (Clickable when printed in IDA)
+        '''
         return "{:02x}".format(self.ea)
 
 class ItaniumVTableGroup(object):
+    ''' A group of consecutive vtables in the Itanium ABI
+    '''
     def __init__(self, ea):
+        #: Start address of the table group
         self.ea = ea
+
+        #: A list of the tables comprising this group
         self.tables = []
 
         prev_offset = None
@@ -113,12 +141,12 @@ class ItaniumVTableGroup(object):
                 break
 
             # Sanity check the offset
-            if prev_offset is None and table.baseoffset != 0:
+            if prev_offset is None and table.offset_to_top != 0:
                 break
-            elif prev_offset is not None and table.baseoffset >= prev_offset:
+            elif prev_offset is not None and table.offset_to_top >= prev_offset:
                 break
 
-            prev_offset = table.baseoffset
+            prev_offset = table.offset_to_top
             self.tables.append(table)
             ea += table.size
 
@@ -126,14 +154,21 @@ class ItaniumVTableGroup(object):
             raise ValueError("Invalid vtable group address `0x{:02x}`".format(self.ea))
 
     def primary_table(self):
+        ''' Same as `self.tables[0]`
+        '''
         return self.tables[0]
 
     @property
     def typeinfo(self):
+        ''' A handle to the typeinfo for the primary table (and so, the full object
+        associated with this table group).
+        '''
         return self.primary_table().typeinfo
 
     @property
     def size(self):
+        ''' The size in bytes of this table group
+        '''
         return sum([s.size for s in self.tables])
 
     @property

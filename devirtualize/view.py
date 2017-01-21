@@ -6,6 +6,9 @@ from .utils import *
 from .type import get_type_by_name, fixup_this_arg_types
 
 def translate_vptr_references(cfunc):
+    ''' The real 'work' function of Devirtualize. This function takes a
+    cfuncptr and devirtualizes calls.
+    '''
     def set_obj_ea(expr, val):
         ''' This function is an unholy incantation. Every time it is called
         it is as if millions of voices cry out all at once and are suddenly
