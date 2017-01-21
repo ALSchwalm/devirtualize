@@ -34,8 +34,7 @@ sys.path.append(os.path.abspath('../'))
 # ones.
 extensions = [
     'sphinx.ext.autodoc',
-    'sphinx.ext.viewcode',
-    'sphinx.ext.githubpages']
+    'sphinx.ext.viewcode']
 
 autodoc_mock_imports = ["idaapi", "idautils", "idc"]
 
