@@ -506,7 +506,10 @@ def fixup_this_arg_types(cfunc):
     idaapi.set_tinfo2(cfunc.entry_ea, tinfo)
 
 def build_types():
-    idc.AddStrucEx(-1, "_vfunc", 0)
+    sid = idc.AddStrucEx(-1, "_vfunc", 0)
+    if sid != -1:
+        sptr = idaapi.get_struc(sid)
+        idaapi.set_struc_hidden(sptr, True)
     for t in Types():
         t.build_struct()
     save_type_info()
