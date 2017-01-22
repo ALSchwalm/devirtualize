@@ -415,7 +415,7 @@ class Type(object):
                     break
             return (total, found)
 
-        if self.vtable is None:
+        if self.tablegroup is None:
             return None
 
         total, found = traverse_heirarchy(self, parent)

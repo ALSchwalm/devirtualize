@@ -66,7 +66,7 @@ def translate_vptr_references(cfunc):
                 self.reset()
                 self.func = e
 
-            elif e.op == idaapi.cot_memref:
+            elif e.op == idaapi.cot_memref or e.op == idaapi.cot_memptr:
                 if e.type.dstr() == "_vfunc **":
                     self.viable = True
                     self.cast_type = e.x.type
@@ -104,10 +104,20 @@ def translate_vptr_references(cfunc):
                     return 0
                 else:
                     self.type.remove_ptr_or_array()
+
+                    # Currently we do this so that base classes have a
+                    # cast_type that is equal to this_type, but maybe
+                    # it causes problems sometimes?
+                    self.cast_type.remove_ptr_or_array()
+
                     this_type = get_type_by_name(self.type.dstr())
 
                     cast_type = get_type_by_name(self.cast_type.dstr())
-                    table = this_type.table_for_cast(cast_type)
+
+                    if cast_type != this_type:
+                        table = this_type.table_for_cast(cast_type)
+                    else:
+                        table = this_type.tablegroup.primary_table()
 
                     if self.index is None:
                         self.index = 0
