@@ -88,7 +88,7 @@ def Types(regenerate=False):
                 parents = [type_matching_typeinfo(types, p)
                            for p in type.typeinfo.parents]
             else:
-                parents = parents_from_destructors(type.tablegroup)
+                parents = parents_from_destructors(type)
 
             for p in parents:
                 p.children.append(type)
@@ -153,42 +153,14 @@ def get_type_by_tinfo(tinfo):
 #TODO:
 #  1. Consider inlined destructors (or children of abstract types)
 #  2. Multiple inheritance
-def parents_from_destructors(tablegroup):
+def parents_from_destructors(type):
     ''' Finds the direct parents of the Type associated with ``tablegroup`` by
     examining function calls in its destructor.
     '''
-    def destructor_calls(tablegroup):
-        from itertools import chain
-        candidates = []
-
-        if tablegroup is None:
-            return []
-
-        # For now just use the first table array
-        primary_table = tablegroup.primary_table()
-
-        # When debug symbols are present, the decompile will usually
-        # refer to the function table as an offset from the start
-        # of the vtable, so also allow references to that.
-        references = chain(idautils.XrefsTo(primary_table.address_point),
-                           idautils.XrefsTo(tablegroup.ea))
-
-        for ref in references:
-            start = as_signed(idc.GetFunctionAttr(ref.frm, idc.FUNCATTR_START),
-                              TARGET_ADDRESS_SIZE)
-            if start == -1:
-                continue
-            candidates.append(start)
-
-        #TODO: don't assume the destructor is virtual
-        candidates = [c for c in candidates if c in primary_table.functions]
-        return candidates
 
     def get_type_having_destructor(func_ea):
         for type in Types():
-            if type.tablegroup is None:
-                continue
-            if func_ea in destructor_calls(type.tablegroup):
+            if func_ea in type.destructors():
                 return type
         return None
 
@@ -220,12 +192,12 @@ def parents_from_destructors(tablegroup):
             if e.op == idaapi.cot_call:
                 self.destructor_candidate = None
 
-
-    #TODO: consider other candidates
-    destructors = destructor_calls(tablegroup)
+    destructors = type.destructors()
 
     if len(destructors) == 0:
         return []
+
+    #TODO: consider other candidates
     destructor = destructors[0]
     parents = []
 
@@ -382,6 +354,51 @@ class Type(object):
                     open_set.add(p)
         return closed_set
 
+    def _refs_to_tablegroup(self):
+        from itertools import chain
+
+        if self.tablegroup is None:
+            return []
+
+        candidates = []
+
+        # For now just use the first table array
+        primary_table = self.tablegroup.primary_table()
+
+        # When debug symbols are present, the decompile will usually
+        # refer to the function table as an offset from the start
+        # of the vtable, so also allow references to that.
+        references = chain(idautils.XrefsTo(primary_table.address_point),
+                           idautils.XrefsTo(self.tablegroup.ea))
+
+        for ref in references:
+            start = as_signed(idc.GetFunctionAttr(ref.frm, idc.FUNCATTR_START),
+                              TARGET_ADDRESS_SIZE)
+            if start == -1:
+                continue
+            candidates.append(start)
+        return candidates
+
+    def constructors(self):
+        ''' A list of constructors associated with this type. The list will
+        be empty for types not backed by tablegroups.
+        '''
+        if self.tablegroup is None:
+            return []
+        candidates = self._refs_to_tablegroup()
+        return [c for c in candidates
+                if c not in self.tablegroup.primary_table().functions]
+
+    def destructors(self):
+        ''' A list of destructors associated with this type. The list will
+        be empty for types not backed by tablegroups.
+        '''
+        if self.tablegroup is None:
+            return []
+        candidates = self._refs_to_tablegroup()
+        return [c for c in candidates
+                if c in self.tablegroup.primary_table().functions]
+
     @property
     def name(self):
         return self._name
@@ -438,6 +455,14 @@ class Type(object):
 
         if as_signed(self.struct, TARGET_ADDRESS_SIZE) == -1:
             raise RuntimeError("Unable to make struct `{}`".format(self.name))
+        else:
+            #TODO: either come up with another way of showing this, or
+            #      sync it with the actual function names
+            cmt = "constructors: "
+            for c in self.constructors():
+                cmt += "{}(0x{:02x}), ".format(idc.Name(c), c)
+            cmt = cmt.strip(", ")
+            idaapi.set_struc_cmt(self.struct, cmt, False)
 
         if TARGET_ADDRESS_SIZE == 8:
             mask = idc.FF_QWRD
