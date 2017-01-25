@@ -47,7 +47,7 @@ def tables_from_heuristics(require_rtti=False):
                 elif require_rtti is False:
                     yield ea
                 ea += table.size
-            except:
+            except ValueError:
                 # Assume vtables are aligned
                 ea += TARGET_ADDRESS_SIZE
 

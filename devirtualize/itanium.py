@@ -3,6 +3,7 @@ For reference, read https://mentorembedded.github.io/cxx-abi/abi.html.
 '''
 
 import idaapi
+import idautils
 import idc
 
 from .utils import *
@@ -90,6 +91,11 @@ class ItaniumVtable(object):
         #: The address of the start of the function array
         self.address_point = ea
 
+        try:
+            next(idautils.XrefsTo(self.address_point))
+        except StopIteration:
+            raise ValueError("Invalid table address `0x{:02x}`".format(self.ea))
+
         while True:
             ea, func = get_address(ea)
 
@@ -137,7 +143,7 @@ class ItaniumVTableGroup(object):
         while True:
             try:
                 table = ItaniumVtable(ea)
-            except:
+            except ValueError:
                 break
 
             # Sanity check the offset
